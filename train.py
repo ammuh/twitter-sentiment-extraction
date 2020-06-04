@@ -9,6 +9,11 @@ import numpy as np
 
 from curves import save_plots
 import argparse
+from tqdm import tqdm
+import math
+
+from torch.utils.data import Dataset, DataLoader
+
 
 def prepare_model(model_type, V, d_embed, d_lstm, layers, lr=.001, l2=0, device = 'cpu'):
     # model = 
@@ -20,11 +25,11 @@ def prepare_model(model_type, V, d_embed, d_lstm, layers, lr=.001, l2=0, device 
     elif model_type == 'blstm':
         model = LSTMSentiment(V, d_embed, d_lstm, layers).to(device)
     
-    criterion = torch.nn.CrossEntropyLoss(size_average=True, ignore_index=-1)
+    criterion = torch.nn.CrossEntropyLoss(reduction='none', ignore_index=-1)#size_average=True, ignore_index=-1)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=l2)
     return model, criterion, optimizer
 
-def train(epoch, dataset, indices, batch_size, model, criterion, optimizer, device):
+def train(epoch, dataset, dataloader, model, criterion, optimizer, device):
     r"""Train an epoch
 
     Args
@@ -42,62 +47,94 @@ def train(epoch, dataset, indices, batch_size, model, criterion, optimizer, devi
 
     """
     model.train()
-
-    indices = indices[np.random.permutation(indices.shape[0])]
-    indices = indices[0:int(indices.shape[0]/batch_size)*batch_size]
-    indices = indices.reshape(int(indices.shape[0]/batch_size), batch_size)
-
+    loss_total = 0.0
     count = 0
-    loss_total = 0
-    for batch_idx in indices:
+    pbar = tqdm(desc='Batch', total=len(dataloader))
+
+    for i, batch in enumerate(dataloader):
+        tweet = batch['tweet'].to(device)
+        selection = batch['selection'].long().to(device)
+
+        non_pad_elements = selection.shape[1] - (selection == -1).sum(dim=1)
         
-        batch = dataset[list(batch_idx)]
 
-        optimizer.zero_grad()
-        inputs = []
-        labels = []
-        sentiments = []
-        loss = None
+        y_hat = model(tweet)
         
-        for seq_x, seq_y, _, _, sentiment in batch:
+        loss = criterion(y_hat.view(-1, 2), selection.view(-1)).reshape(tweet.shape[0], -1)
 
-            inputs.append(seq_x.unsqueeze(0))
-            labels.append(seq_y.unsqueeze(0))
-            sentiments.append(sentiment.unsqueeze(0))
+        loss = loss / non_pad_elements.unsqueeze(-1)
 
-            # print('\r[Epoch {}][Batch {}/{}] Data to GPU'.format(epoch, count, len(indices)), end = '')
-            # seq_x = [torch.LongTensor(word).to(device) for word in seq_x]
-            # sentiment = one_hot([sentiment] * len(seq_x), 3).to(device)
-            # print('\r[Epoch {}][Batch {}/{}] Forward'.format(epoch, count, len(indices)), end = '')
+        loss = loss.sum()/ tweet.shape[0]
+        # loss = 0.0
+        
+        # for i, seq in enumerate(y_hat):
+        #     l = criterion(seq.view(-1, 2), selection[i].view(-1))
+        #     loss += l
+        
+        # loss = loss / tweet.shape[0]
+        loss_total += loss.data.item()
+
+        loss.backward()
+        count += 1
+        pbar.update()
+    pbar.clear()
+    pbar.close()
+    return loss_total/count
+    # indices = indices[np.random.permutation(indices.shape[0])]
+    # indices = indices[0:int(indices.shape[0]/batch_size)*batch_size]
+    # indices = indices.reshape(int(indices.shape[0]/batch_size), batch_size)
+
+    # count = 0
+    # loss_total = 0
+    # for batch_idx in indices:
+        
+    #     batch = dataset[list(batch_idx)]
+
+    #     optimizer.zero_grad()
+    #     inputs = []
+    #     labels = []
+    #     sentiments = []
+    #     loss = None
+        
+    #     for seq_x, seq_y, _, _, sentiment in batch:
+
+    #         inputs.append(seq_x.unsqueeze(0))
+    #         labels.append(seq_y.unsqueeze(0))
+    #         sentiments.append(sentiment.unsqueeze(0))
+
+    #         # print('\r[Epoch {}][Batch {}/{}] Data to GPU'.format(epoch, count, len(indices)), end = '')
+    #         # seq_x = [torch.LongTensor(word).to(device) for word in seq_x]
+    #         # sentiment = one_hot([sentiment] * len(seq_x), 3).to(device)
+    #         # print('\r[Epoch {}][Batch {}/{}] Forward'.format(epoch, count, len(indices)), end = '')
            
             
-            # outputs.append(y_hat)
-            # labels
-        # print(outputs)
+    #         # outputs.append(y_hat)
+    #         # labels
+    #     # print(outputs)
 
-        # print(labels)
-        # loss = criterion(torch.cat(outputs, 0), torch.cat(labels, 0))
+    #     # print(labels)
+    #     # loss = criterion(torch.cat(outputs, 0), torch.cat(labels, 0))
         
-        print('\r[Epoch {}][Batch {}/{}] Forward pass...'.format(epoch, count, len(indices)), end = '')
-        y_hat = model(torch.cat(inputs), torch.cat(sentiments))#.reshape(len(batch), dataset.pad, -1)
+    #     print('\r[Epoch {}][Batch {}/{}] Forward pass...'.format(epoch, count, len(indices)), end = '')
+    #     y_hat = model(torch.cat(inputs), torch.cat(sentiments))#.reshape(len(batch), dataset.pad, -1)
         
-        loss = 0
+    #     loss = 0
 
-        for i, seq in enumerate(y_hat):
-            l = criterion(seq.view(-1, 2), labels[i].view(-1))
-            loss += l
-            loss_total += l
+    #     for i, seq in enumerate(y_hat):
+    #         l = criterion(seq.view(-1, 2), labels[i].view(-1))
+    #         loss += l
+    #         loss_total += l
         
-        loss = loss / batch_size
+    #     loss = loss / batch_size
 
         
-        print('\r[Epoch {}][Batch {}/{}] Backward pass...'.format(epoch, count, len(indices)), end = '')
-        loss.backward()
-        optimizer.step()
-        count += 1
-        print('\r[Epoch {}][Batch {}/{}]'.format(epoch, count, len(indices)), end = '')
+    #     print('\r[Epoch {}][Batch {}/{}] Backward pass...'.format(epoch, count, len(indices)), end = '')
+    #     loss.backward()
+    #     optimizer.step()
+    #     count += 1
+    #     print('\r[Epoch {}][Batch {}/{}]'.format(epoch, count, len(indices)), end = '')
 
-    return loss_total.data.item() / (len(indices) * batch_size)
+    # return loss_total.data.item() / (len(indices) * batch_size)
 
 def evaluate(epoch, dataset, indices, model, criterion, device):
     model.eval()
@@ -195,9 +232,7 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", default=32, type=int, help="Batch size [default: 32]")
     parser.add_argument("--embed", default=64, type=int, help="Number of neurons of word embedding [default: 200]")
     parser.add_argument("--hidden", default=64, type=int, help="Number of neurons of each hidden layer [default: 200]")
-
     parser.add_argument("--layers", default=2, type=int, help="Number of encoder layers layers [default: 1]")
-
     parser.add_argument("--lr", default=1e-3, type=float, help="Learning rate [default: 20]")
     parser.add_argument("--epoch", default=100, type=int, help="Number of training epochs [default: 10]")
     parser.add_argument("--device", type=int, help="GPU card ID to use (if not given, use CPU)")
@@ -213,14 +248,20 @@ if __name__ == "__main__":
     device = 'cuda:{}'.format(args.device) if args.device is not None else 'cpu'
 
     dataset = Tweets(device)
+    train_dataset, val_dataset = torch.utils.data.random_split(dataset, [math.floor(len(dataset)*.7), math.floor(len(dataset)*.3)])
 
-    train_idx, val_idx = dataset.get_splits()
+    train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=12, pin_memory=True)
 
     V = len(dataset.vocab.keys())
 
     model, criterion, optimizer = prepare_model(args.model_type, V, args.embed, args.hidden, args.layers, lr=args.lr, device = device)
     
-
+    pbar = tqdm(desc='Epoch', total=args.epoch)
+    for i in range(args.epoch):
+        train_loss = train(i, dataset, train_dataloader,  model, criterion, optimizer, device)
+        pbar.write(str(train_loss))
+        pbar.update()
+    pbar.close()
     train_losses = []
     train_jaccs = []
     val_losses = []
@@ -230,10 +271,9 @@ if __name__ == "__main__":
     
     for i in range(args.epoch):
 
-        train_loss = train(i, dataset, train_idx, args.batch_size, model, criterion, optimizer, device)
+        train_loss = train(i, train_dataset, train_dataloader, model, criterion, optimizer, device)
         
-        # train_loss = 0
-        strain_loss, train_jacc = evaluate(i, dataset, train_idx[np.random.permutation(8000)], model, criterion, device)
+        strain_loss, train_jacc = evaluate(i, dataset, train_idx, model, criterion, device)
         val_loss, val_jacc = evaluate(i, dataset, val_idx, model, criterion, device)
 
         train_losses.append(train_loss)

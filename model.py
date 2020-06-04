@@ -71,13 +71,13 @@ class TransformerSentiment(nn.Module):
         enc_layer = nn.TransformerEncoderLayer(d_model=d_embed, nhead=nhead, dim_feedforward=hidden_d, dropout=dropout)
         self.transformer = nn.TransformerEncoder(enc_layer, num_layers=layers)
 
-        self.fc = FinalLinear(d_embed + 3, 2)
+        self.fc = FinalLinear(d_embed, 2)
         self.hidden_d = d_embed
 
         self.mask = None
 
-    def forward(self, seq, sent_1_hot):
-        # B, N, D
+    def forward(self, seq):
+
         if self.mask is None or self.mask.shape != seq.shape:
             self.mask = torch.zeros(seq.shape).to(seq.device)
     
@@ -87,15 +87,13 @@ class TransformerSentiment(nn.Module):
 
         seq = self.pos_embed(emb).transpose(0, 1)
 
-
-
         seq = self.transformer(seq, src_key_padding_mask=seq_mask).transpose(0,1)
 
-        seq = torch.cat((seq, sent_1_hot.float()), 2)
-        out = []
-        for i, s in enumerate(seq):
-            out.append(self.fc(s.view(-1, self.hidden_d+3)).unsqueeze(0))
-        return torch.cat(out)
+        B = seq.shape[0]
+        S = seq.shape[1]
+
+        out = self.fc(seq.reshape(B*S, -1)).reshape(B, S, 2)
+        return out
 
 
 ## Retrieved from pytorch website
@@ -114,10 +112,5 @@ class PositionalEncoding(nn.Module):
         self.register_buffer('pe', pe)
 
     def forward(self, x):
-        # print(x.shape)
-        # print(self.pe[:x.shape[0], :x.shape[1]])
-        # print(x.shape)
-        # print(self.pe.shape)
         x = x + self.pe[:x.shape[0], :]
-        # print(x.shape)
         return self.dropout(x)

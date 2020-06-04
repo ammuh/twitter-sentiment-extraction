@@ -18,7 +18,7 @@ class Tweets(Dataset):
         
         self.tokenizer = BertWordPieceTokenizer("./data/bert-base-uncased-vocab.txt", lowercase=True, clean_text=True)
 
-        self.tokenizer.enable_padding(max_length = pad)
+        self.tokenizer.enable_padding(max_length = pad-1) # -1 for sentiment token
         self.vocab = self.tokenizer.get_vocab()
         self.tokenizer.add_special_tokens(['[POS]'])
         self.tokenizer.add_special_tokens(['[NEG]'])
@@ -47,8 +47,8 @@ class Tweets(Dataset):
                     'tweet' : word_to_index
                 })
 
-
         else:
+            
             data = pd.read_csv(TRAIN_PATH).values
 
             for row in data:
@@ -66,19 +66,17 @@ class Tweets(Dataset):
                 token_membership = [0] * len(word_to_index)
 
                 for i, (start, end) in enumerate(offsets):
-                    if word_to_index[i] == 0:
+                    if word_to_index[i] == 0 or word_to_index[i] == 101 or word_to_index[i] == 102:
                         token_membership[i] = -1
                     elif sum(char_membership[start:end]) > 0:
                         token_membership[i] = 1
 
                 # token_membership = torch.LongTensor(token_membership).to(device)
                 word_to_index = [self.sent_t[sentiment]] + word_to_index
-                token_membership = [0] + token_membership
-
+                token_membership = [-1] + token_membership
 
                 word_to_index = np.array(word_to_index)
                 token_membership = np.array(token_membership).astype('float')
-
 
                 self.samples.append({
                     'tid' : tid, 
@@ -96,10 +94,8 @@ class Tweets(Dataset):
         return train_indices, valid_indices
 
     def k_folds(self, k=5):
-        
         N = len(self.samples)
         indices = np.random.permutation(N)
-        
         return np.array_split(indices, k)
 
     def __len__(self):
@@ -112,7 +108,6 @@ class Tweets(Dataset):
             pass
         return [self.samples[i] for i in idx]
         
-
 
 if __name__ == "__main__":
 
