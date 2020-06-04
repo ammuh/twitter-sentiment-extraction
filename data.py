@@ -82,7 +82,8 @@ class Tweets(Dataset):
                     'tid' : tid, 
                     'sentiment' : sentiment,
                     'tweet' : word_to_index,
-                    'selection' : token_membership
+                    'selection' : token_membership,
+                    'raw_selection': selection
                 })
               
     def get_splits(self, val_size=.3):

@@ -15,13 +15,13 @@ import math
 from torch.utils.data import Dataset, DataLoader
 
 
-def prepare_model(model_type, V, d_embed, d_lstm, layers, lr=.001, l2=0, device = 'cpu'):
+def prepare_model(model_type, V, d_embed, d_lstm, layers, nhead, dropout=.2, lr=.001, l2=0, device = 'cpu'):
     # model = 
 
     model = None
     if model_type == 'transformer':
         print(model_type)
-        model = TransformerSentiment(V, d_embed, d_lstm, layers, nhead=4, dropout=.2).to(device)
+        model = TransformerSentiment(V, d_embed, d_lstm, layers, nhead=nhead, dropout=dropout).to(device)
     elif model_type == 'blstm':
         model = LSTMSentiment(V, d_embed, d_lstm, layers).to(device)
     
@@ -30,148 +30,67 @@ def prepare_model(model_type, V, d_embed, d_lstm, layers, lr=.001, l2=0, device 
     return model, criterion, optimizer
 
 def train(epoch, dataset, dataloader, model, criterion, optimizer, device):
-    r"""Train an epoch
-
-    Args
-    ----
-    dataset : CoraDataset
-        Cora dataset.
-    indices : np.array
-        An array of points ID to train on.
-    model : torch.nn.Module
-        Neural network model.
-    criterion : torch.nn.Module
-        Loss function.
-    optimizer : torch.optim.Optimizer
-        Training parameter optimizer.
-
-    """
     model.train()
-    loss_total = 0.0
+    loss_sum = 0.0
     count = 0
-    pbar = tqdm(desc='Batch', total=len(dataloader))
+    pbar = tqdm(desc='Train Batch', total=len(dataloader), leave=False)
 
     for i, batch in enumerate(dataloader):
+
         tweet = batch['tweet'].to(device)
         selection = batch['selection'].long().to(device)
-
         non_pad_elements = selection.shape[1] - (selection == -1).sum(dim=1)
-        
+
+        optimizer.zero_grad()
 
         y_hat = model(tweet)
         
-        loss = criterion(y_hat.view(-1, 2), selection.view(-1)).reshape(tweet.shape[0], -1)
-
-        loss = loss / non_pad_elements.unsqueeze(-1)
-
-        loss = loss.sum()/ tweet.shape[0]
-        # loss = 0.0
+        loss = criterion(y_hat.permute(0,2,1), selection)
+        loss = (loss / non_pad_elements.unsqueeze(-1)).sum() / tweet.shape[0]
         
-        # for i, seq in enumerate(y_hat):
-        #     l = criterion(seq.view(-1, 2), selection[i].view(-1))
-        #     loss += l
+        loss_sum += loss.data.item()
         
-        # loss = loss / tweet.shape[0]
-        loss_total += loss.data.item()
-
         loss.backward()
+        # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+        optimizer.step()
         count += 1
         pbar.update()
     pbar.clear()
     pbar.close()
-    return loss_total/count
-    # indices = indices[np.random.permutation(indices.shape[0])]
-    # indices = indices[0:int(indices.shape[0]/batch_size)*batch_size]
-    # indices = indices.reshape(int(indices.shape[0]/batch_size), batch_size)
+    return loss_sum / count
 
-    # count = 0
-    # loss_total = 0
-    # for batch_idx in indices:
-        
-    #     batch = dataset[list(batch_idx)]
-
-    #     optimizer.zero_grad()
-    #     inputs = []
-    #     labels = []
-    #     sentiments = []
-    #     loss = None
-        
-    #     for seq_x, seq_y, _, _, sentiment in batch:
-
-    #         inputs.append(seq_x.unsqueeze(0))
-    #         labels.append(seq_y.unsqueeze(0))
-    #         sentiments.append(sentiment.unsqueeze(0))
-
-    #         # print('\r[Epoch {}][Batch {}/{}] Data to GPU'.format(epoch, count, len(indices)), end = '')
-    #         # seq_x = [torch.LongTensor(word).to(device) for word in seq_x]
-    #         # sentiment = one_hot([sentiment] * len(seq_x), 3).to(device)
-    #         # print('\r[Epoch {}][Batch {}/{}] Forward'.format(epoch, count, len(indices)), end = '')
-           
-            
-    #         # outputs.append(y_hat)
-    #         # labels
-    #     # print(outputs)
-
-    #     # print(labels)
-    #     # loss = criterion(torch.cat(outputs, 0), torch.cat(labels, 0))
-        
-    #     print('\r[Epoch {}][Batch {}/{}] Forward pass...'.format(epoch, count, len(indices)), end = '')
-    #     y_hat = model(torch.cat(inputs), torch.cat(sentiments))#.reshape(len(batch), dataset.pad, -1)
-        
-    #     loss = 0
-
-    #     for i, seq in enumerate(y_hat):
-    #         l = criterion(seq.view(-1, 2), labels[i].view(-1))
-    #         loss += l
-    #         loss_total += l
-        
-    #     loss = loss / batch_size
-
-        
-    #     print('\r[Epoch {}][Batch {}/{}] Backward pass...'.format(epoch, count, len(indices)), end = '')
-    #     loss.backward()
-    #     optimizer.step()
-    #     count += 1
-    #     print('\r[Epoch {}][Batch {}/{}]'.format(epoch, count, len(indices)), end = '')
-
-    # return loss_total.data.item() / (len(indices) * batch_size)
-
-def evaluate(epoch, dataset, indices, model, criterion, device):
+def evaluate(epoch, dataset, dataloader, model, criterion, device, prefix=None):
     model.eval()
     with torch.no_grad():
         jaccard_sum, loss_sum, count = 0.0, 0.0, 0.0
-        
-    
-        print('\r[Epoch {}][Evaluate {}/{}]'.format(epoch, count, len(indices)), end = '')
-        for b in range(0, len(indices), 64):
 
-            batch = indices[b:b+64]
-            inputs = []
-            labels = []
-            sentiments = []
-            for i in batch:
-                seq_x, seq_y, _, _, sentiment = dataset[i]
-                inputs.append(seq_x.unsqueeze(0))
-                labels.append(seq_y.unsqueeze(0))
-                sentiments.append(sentiment.unsqueeze(0))
+        pbar = tqdm(desc='{}Eval Batch'.format('' if prefix is None else prefix + ' '), total=len(dataloader), leave=False)
 
-            y_hat_full = model(torch.cat(inputs), torch.cat(sentiments))#.reshape(len(batch), dataset.pad, -1)
-
-            for i, seq in enumerate(y_hat_full):
-                loss_sum += criterion(seq.view(-1, 2), labels[i].view(-1))
+        for i, batch in enumerate(dataloader):
             
+            tweet = batch['tweet'].to(device)
+            selection = batch['selection'].long().to(device)
+            raw_selection = batch['raw_selection']
+
+            non_pad_elements = selection.shape[1] - (selection == -1).sum(dim=1)
+            y_hat = model(tweet)
+
+            loss = criterion(y_hat.permute(0,2,1), selection)
+            loss = (loss / non_pad_elements.unsqueeze(-1)).sum() / tweet.shape[0]
+            loss_sum += loss.data.item()
+
+            y_hat = torch.argmax(y_hat, dim=2)
+            final = dataset.tokenizer.decode_batch((y_hat * tweet).tolist())
+            # print(final)
+            for j, raw in enumerate(raw_selection):
+                selection_output = final[j]
+                jaccard_sum += jaccard(raw, selection_output) / tweet.shape[0]
             
-            y_hat = torch.argmax(y_hat_full, dim=2)
-            final = dataset.tokenizer.decode_batch((y_hat * torch.cat(inputs)).tolist())
-            for row, i in enumerate(batch):
-                seq_x, seq_y, tweet, selection, sentiment = dataset[i]
-
-                selection_output = final[row]
-
-                jaccard_sum += jaccard(' '.join(selection), ' '.join(selection_output))
-                count += 1
-                print('\r[Epoch {}][Evaluate {}/{}]'.format(epoch, count, len(indices)), end = '')
-        return loss_sum.data.item() / count, jaccard_sum / count
+            count += 1
+            pbar.update()
+        pbar.clear()
+        pbar.close()
+        return loss_sum / count, jaccard_sum / count
 
 def fit(model_type, dataset, train_idx, val_idx, device, save, args, stopping=4):
 
@@ -233,7 +152,9 @@ if __name__ == "__main__":
     parser.add_argument("--embed", default=64, type=int, help="Number of neurons of word embedding [default: 200]")
     parser.add_argument("--hidden", default=64, type=int, help="Number of neurons of each hidden layer [default: 200]")
     parser.add_argument("--layers", default=2, type=int, help="Number of encoder layers layers [default: 1]")
+    parser.add_argument("--nhead", default=2, type=int, help="Number of attention heads [default: 2]")
     parser.add_argument("--lr", default=1e-3, type=float, help="Learning rate [default: 20]")
+    parser.add_argument("--dropout", default=.2, type=float, help="Dropout [default: 20]")
     parser.add_argument("--epoch", default=100, type=int, help="Number of training epochs [default: 10]")
     parser.add_argument("--device", type=int, help="GPU card ID to use (if not given, use CPU)")
     parser.add_argument("--seed", default=42, type=int, help="Random seed [default: 42]")
@@ -251,39 +172,46 @@ if __name__ == "__main__":
     train_dataset, val_dataset = torch.utils.data.random_split(dataset, [math.floor(len(dataset)*.7), math.floor(len(dataset)*.3)])
 
     train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=12, pin_memory=True)
+    val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, num_workers=12, pin_memory=True)
 
     V = len(dataset.vocab.keys())
 
-    model, criterion, optimizer = prepare_model(args.model_type, V, args.embed, args.hidden, args.layers, lr=args.lr, device = device)
+    model, criterion, optimizer = prepare_model(args.model_type, V, args.embed, args.hidden, args.layers, args.nhead, dropout=args.dropout, lr=args.lr, device = device)
     
     pbar = tqdm(desc='Epoch', total=args.epoch)
+
     for i in range(args.epoch):
-        train_loss = train(i, dataset, train_dataloader,  model, criterion, optimizer, device)
-        pbar.write(str(train_loss))
+        pbar.write('--------------Epoch {}--------------'.format(i))
+        train(i, dataset, train_dataloader,  model, criterion, optimizer, device)
+        train_loss, train_jaccard = evaluate(i, dataset, train_dataloader, model, criterion, device)
+        pbar.write('Train Loss: {}, Train Jaccard: {}'.format(train_loss, train_jaccard))
+        val_loss, val_jaccard = evaluate(i, dataset, val_dataloader, model, criterion, device)
+        pbar.write('Val Loss: {}, Val Jaccard: {}'.format(val_loss, val_jaccard))
         pbar.update()
     pbar.close()
-    train_losses = []
-    train_jaccs = []
-    val_losses = []
-    val_jaccs = []
 
-    best_jacc = 0
+    # train_losses = []
+    # train_jaccs = []
+    # val_losses = []
+    # val_jaccs = []
+
+    # best_jacc = 0
     
-    for i in range(args.epoch):
+    # for i in range(args.epoch):
 
-        train_loss = train(i, train_dataset, train_dataloader, model, criterion, optimizer, device)
+    #     train_loss = train(i, train_dataset, train_dataloader, model, criterion, optimizer, device)
         
-        strain_loss, train_jacc = evaluate(i, dataset, train_idx, model, criterion, device)
-        val_loss, val_jacc = evaluate(i, dataset, val_idx, model, criterion, device)
+    #     strain_loss, train_jacc = evaluate(i, dataset, train_idx, model, criterion, device)
+    #     val_loss, val_jacc = evaluate(i, dataset, val_idx, model, criterion, device)
 
-        train_losses.append(train_loss)
-        train_jaccs.append(train_jacc)
-        val_losses.append(val_loss)
-        val_jaccs.append(val_jacc)
+    #     train_losses.append(train_loss)
+    #     train_jaccs.append(train_jacc)
+    #     val_losses.append(val_loss)
+    #     val_jaccs.append(val_jacc)
 
-        if val_jacc > best_jacc:
-            best_jacc = val_jacc
-            torch.save(model.state_dict(), save)
-        print("\r[Epoch {}] Train Loss: {}, Train Jaccard: {} | Val Loss: {}, Val Jaccard: {}".format(i, train_loss, train_jacc, val_loss, val_jacc))
+    #     if val_jacc > best_jacc:
+    #         best_jacc = val_jacc
+    #         torch.save(model.state_dict(), save)
+    #     print("\r[Epoch {}] Train Loss: {}, Train Jaccard: {} | Val Loss: {}, Val Jaccard: {}".format(i, train_loss, train_jacc, val_loss, val_jacc))
 
-        save_plots(train_losses, train_jaccs, val_losses, val_jaccs, file_prefix=model_prefix)
+    #     save_plots(train_losses, train_jaccs, val_losses, val_jaccs, file_prefix=model_prefix)
