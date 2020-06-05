@@ -64,12 +64,18 @@ class Tweets(Dataset):
                 offsets = tokens.offsets
 
                 token_membership = [0] * len(word_to_index)
-
-                for i, (start, end) in enumerate(offsets):
+                
+                # Inclusive indices
+                start = None
+                end = None
+                for i, (s, e) in enumerate(offsets):
                     if word_to_index[i] == 0 or word_to_index[i] == 101 or word_to_index[i] == 102:
                         token_membership[i] = -1
-                    elif sum(char_membership[start:end]) > 0:
+                    elif sum(char_membership[s:e]) > 0:
                         token_membership[i] = 1
+                        if start is None:
+                            start = i
+                        end = i
 
                 # token_membership = torch.LongTensor(token_membership).to(device)
                 word_to_index = [self.sent_t[sentiment]] + word_to_index
@@ -77,13 +83,15 @@ class Tweets(Dataset):
 
                 word_to_index = np.array(word_to_index)
                 token_membership = np.array(token_membership).astype('float')
-
                 self.samples.append({
                     'tid' : tid, 
                     'sentiment' : sentiment,
                     'tweet' : word_to_index,
                     'selection' : token_membership,
-                    'raw_selection': selection
+                    'raw_selection': selection,
+                    'raw_tweet': tweet,
+                    'start': start,
+                    'end' : end
                 })
               
     def get_splits(self, val_size=.3):
@@ -113,8 +121,9 @@ class Tweets(Dataset):
 if __name__ == "__main__":
 
     dataset = Tweets()
-    dataloader = DataLoader(dataset, batch_size=4, shuffle=True, num_workers=4)
+    dataloader = DataLoader(dataset, batch_size=10, shuffle=True, num_workers=4)
     
     for data in dataloader:
-        print(data['tweet'])
+        print(data['start'])
+        print(data['end'])
         break

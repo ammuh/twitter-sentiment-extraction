@@ -31,3 +31,6 @@ def save_plots(train_losses, train_accs, test_losses, test_accs, file_prefix='')
     plt.savefig('{}accuracy.png'.format(file_prefix + '_'))
 
     plt.close()
+    plt.clf()
+    del fig
+    del ax

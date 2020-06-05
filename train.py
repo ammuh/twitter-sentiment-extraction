@@ -44,14 +44,13 @@ def train(epoch, dataset, dataloader, model, criterion, optimizer, device):
         optimizer.zero_grad()
 
         y_hat = model(tweet)
-        
+
+
         loss = criterion(y_hat.permute(0,2,1), selection)
-        loss = (loss / non_pad_elements.unsqueeze(-1)).sum() / tweet.shape[0]
-        
-        loss_sum += loss.data.item()
-        
+        loss = (loss / non_pad_elements.unsqueeze(-1))[selection != -1].sum() / tweet.shape[0]
         loss.backward()
-        # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+        loss_sum += loss.data.item()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
         optimizer.step()
         count += 1
         pbar.update()
@@ -63,6 +62,21 @@ def evaluate(epoch, dataset, dataloader, model, criterion, device, prefix=None):
     model.eval()
     with torch.no_grad():
         jaccard_sum, loss_sum, count = 0.0, 0.0, 0.0
+        K = 5
+        samples = {
+            'positive' : {
+                'best' : [],
+                'worst' : [],
+            },
+            'negative' : {
+                'best' : [],
+                'worst' : [],
+            },
+            'neutral' : {
+                'best' : [],
+                'worst' : [],
+            },
+        }
 
         pbar = tqdm(desc='{}Eval Batch'.format('' if prefix is None else prefix + ' '), total=len(dataloader), leave=False)
 
@@ -71,12 +85,14 @@ def evaluate(epoch, dataset, dataloader, model, criterion, device, prefix=None):
             tweet = batch['tweet'].to(device)
             selection = batch['selection'].long().to(device)
             raw_selection = batch['raw_selection']
+            raw_tweet = batch['raw_tweet']
+            sentiment = batch['sentiment']
 
             non_pad_elements = selection.shape[1] - (selection == -1).sum(dim=1)
             y_hat = model(tweet)
 
             loss = criterion(y_hat.permute(0,2,1), selection)
-            loss = (loss / non_pad_elements.unsqueeze(-1)).sum() / tweet.shape[0]
+            loss = (loss / non_pad_elements.unsqueeze(-1))[selection != -1].sum() / tweet.shape[0]
             loss_sum += loss.data.item()
 
             y_hat = torch.argmax(y_hat, dim=2)
@@ -84,13 +100,56 @@ def evaluate(epoch, dataset, dataloader, model, criterion, device, prefix=None):
             # print(final)
             for j, raw in enumerate(raw_selection):
                 selection_output = final[j]
-                jaccard_sum += jaccard(raw, selection_output) / tweet.shape[0]
-            
+                jacc = jaccard(raw, selection_output)
+                jaccard_sum += jacc / tweet.shape[0]
+                
+                if len(samples[sentiment[j]]['best']) < K:
+                    samples[sentiment[j]]['best'].append((jacc, raw_tweet[j], raw, selection_output))
+                elif jacc > samples[sentiment[j]]['best'][0][0]:
+                    samples[sentiment[j]]['best'].append((jacc, raw_tweet[j], raw, selection_output))
+                    samples[sentiment[j]]['best'].sort(key=lambda x: x[0])
+                    samples[sentiment[j]]['best'].pop(0)
+                
+                if len(samples[sentiment[j]]['worst']) < K:
+                    samples[sentiment[j]]['worst'].append((jacc, raw_tweet[j], raw, selection_output))
+                elif jacc < samples[sentiment[j]]['worst'][-1][0]:
+                    samples[sentiment[j]]['worst'].append((jacc, raw_tweet[j], raw, selection_output))
+                    samples[sentiment[j]]['worst'].sort(key=lambda x: x[0])
+                    samples[sentiment[j]]['worst'].pop(-1)
+
             count += 1
             pbar.update()
         pbar.clear()
         pbar.close()
-        return loss_sum / count, jaccard_sum / count
+        return loss_sum / count, jaccard_sum / count, samples
+
+def stats_to_string(dict):
+    out = ''
+    out += 'Positive Tweets\n'
+    out += '\tBest Tweets\n'
+    for tweet in dict['positive']['best']:
+        out += '\t\tScore: "{}", Tweet: "{}"\n\t\t\tSelection: "{}"\n\t\t\tPredicted: "{}"\n'.format(*tweet)
+    out += '\tWorst Tweets\n'
+    for tweet in dict['positive']['worst']:
+        out += '\t\tScore: "{}", Tweet: "{}"\n\t\t\tSelection: "{}"\n\t\t\tPredicted: "{}"\n'.format(*tweet)
+    
+    out += 'Negative Tweets\n'
+    out += '\tBest Tweets\n'
+    for tweet in dict['negative']['best']:
+        out += '\t\tScore: "{}", Tweet: "{}"\n\t\t\tSelection: "{}"\n\t\t\tPredicted: "{}"\n'.format(*tweet)
+    out += '\tWorst Tweets\n'
+    for tweet in dict['negative']['worst']:
+        out += '\t\tScore: "{}", Tweet: "{}"\n\t\t\tSelection: "{}"\n\t\t\tPredicted: "{}"\n'.format(*tweet)
+
+    out += 'Neutral Tweets\n'
+    out += '\tBest Tweets\n'
+    for tweet in dict['neutral']['best']:
+        out += '\t\tScore: "{}", Tweet: "{}"\n\t\t\tSelection: "{}"\n\t\t\tPredicted: "{}"\n'.format(*tweet)
+    out += '\tWorst Tweets\n'
+    for tweet in dict['neutral']['worst']:
+        out += '\t\tScore: "{}", Tweet: "{}"\n\t\t\tSelection: "{}"\n\t\t\tPredicted: "{}"\n'.format(*tweet)
+    return out
+
 
 def fit(model_type, dataset, train_idx, val_idx, device, save, args, stopping=4):
 
@@ -164,7 +223,7 @@ if __name__ == "__main__":
     np.random.seed(args.seed)
     
     model_prefix = '{}_{}_{}_{}'.format(args.model_type, args.embed, args.hidden, args.layers)
-    save = './{}.pth'.format(model_prefix)
+    save = './models/{}.pth'.format(model_prefix)
 
     device = 'cuda:{}'.format(args.device) if args.device is not None else 'cpu'
 
@@ -180,14 +239,43 @@ if __name__ == "__main__":
     
     pbar = tqdm(desc='Epoch', total=args.epoch)
 
+
+    train_losses = []
+    train_jaccs = []
+    val_losses = []
+    val_jaccs = []
+
+    best_jacc = 0
+    
     for i in range(args.epoch):
-        pbar.write('--------------Epoch {}--------------'.format(i))
         train(i, dataset, train_dataloader,  model, criterion, optimizer, device)
-        train_loss, train_jaccard = evaluate(i, dataset, train_dataloader, model, criterion, device)
+        train_loss, train_jaccard, train_stats = evaluate(i, dataset, train_dataloader, model, criterion, device, prefix='Train')
+        val_loss, val_jaccard, val_stats = evaluate(i, dataset, val_dataloader, model, criterion, device, prefix='Val')
+
+
+        badge = ''
+        if val_jaccard > best_jacc:
+            best_jacc = val_jaccard
+            torch.save(model.state_dict(), save)
+            badge += '*'
+        
+        pbar.write('--------------{}Epoch {}--------------'.format(badge, i))
         pbar.write('Train Loss: {}, Train Jaccard: {}'.format(train_loss, train_jaccard))
-        val_loss, val_jaccard = evaluate(i, dataset, val_dataloader, model, criterion, device)
         pbar.write('Val Loss: {}, Val Jaccard: {}'.format(val_loss, val_jaccard))
+        # pbar.write('***************Train Stats***************')
+        # pbar.write(stats_to_string(train_stats))
+        # pbar.write('***************Val Stats***************')
+        pbar.write(stats_to_string(val_stats))
         pbar.update()
+
+        
+        train_losses.append(train_loss)
+        train_jaccs.append(train_jaccard)
+        val_losses.append(val_loss)
+        val_jaccs.append(val_jaccard)
+
+        save_plots(train_losses, train_jaccs, val_losses, val_jaccs, file_prefix=model_prefix)
+
     pbar.close()
 
     # train_losses = []
