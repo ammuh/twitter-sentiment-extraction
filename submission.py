@@ -1,31 +1,56 @@
 import torch
 from data import Tweets
-from model import Embed, LSTM, LSTMSentiment, TransformerSentiment
+from model import Embed, TransformerSentiment
+from tqdm import tqdm
+from torch.utils.data import Dataset, DataLoader
 
-data = Tweets('cuda:0', test=True)
-
-
-V = len(data.vocab.keys())
-
-model = LSTMSentiment(V, 64, 64, 2).to('cuda:0')
-
-model.load_state_dict(torch.load('blstm_64_64_2_fold.pth'))
+device = 'cuda:0'
+dataset = Tweets(device, test=True)
 
 
-file1 = open("submission.csv","w") 
+V = len(dataset.vocab.keys())
+P = len(dataset.pos_set.keys())
+model = TransformerSentiment(V, P, 128, 128, 8, nhead=8, dropout=.2).to(device)
+
+model.load_state_dict(torch.load('./models/pos_transformer_128_128_8.pth'))
+
+model.eval()
+file1 = open("submission.csv", "w")
 file1.write('textID,selected_text\n')
-for row in data:
-    tid, tweet, sentiments = tuple(row)
-    
 
-    
-    y_hat_full = model(tweet.unsqueeze(0), sentiments.unsqueeze(0))#.reshape(len(batch), dataset.pad, -1)
+dataloader = DataLoader(dataset, batch_size=100,
+                        num_workers=12, pin_memory=True)
 
+with torch.no_grad():
 
-    y_hat = torch.argmax(y_hat_full[0], dim=1)
+    model.eval()
+    with torch.no_grad():
 
-    selection_output = data.tokenizer.decode(list(y_hat * tweet))
-    print(selection_output)
-    file1.write('{},{}\n'.format(tid, selection_output))
+        pbar = tqdm(desc='Submission', total=len(dataloader), leave=False)
+
+        for i, batch in enumerate(dataloader):
+            tid = batch['tid']
+            tweet = batch['tweet'].to(device)
+            sentiment = batch['sentiment']
+            offsets = batch['offsets']
+            raw_tweet = batch['raw_tweet']
+            pos = batch['pos'].to(device)
+
+            y_hat_start, y_hat_end = model(tweet, pos)
+
+            y_hat_start = torch.argmax(y_hat_start, dim=1)
+            y_hat_end = torch.argmax(y_hat_end, dim=1)
+
+            final = []
+
+            for j, t in enumerate(tweet):
+                s = offsets[j][y_hat_start[j]][0]
+                e = offsets[j][y_hat_end[j]][1]
+
+                file1.write('{},"{}"\n'.format(tid[j], raw_tweet[j][s:e]))
+
+            pbar.update()
+        pbar.clear()
+        pbar.close()
 
 file1.close()

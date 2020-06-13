@@ -1,7 +1,8 @@
+import matplotlib.pyplot as plt
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
-import matplotlib.pyplot as plt
+
 
 def save_plots(train_losses, train_accs, test_losses, test_accs, file_prefix=''):
     """Plot
@@ -30,7 +31,5 @@ def save_plots(train_losses, train_accs, test_losses, test_accs, file_prefix='')
     ax.legend(loc='lower right')
     plt.savefig('{}accuracy.png'.format(file_prefix + '_'))
 
-    plt.close()
     plt.clf()
-    del fig
-    del ax
+    plt.close('all')

@@ -35,7 +35,8 @@ from tokenizers import BertWordPieceTokenizer
 sentence = "[CLS] will be back later.  www.facebook.com ,will be back later, loooove u @mahboi #blessed"
 # Bert vocabularies
 # Instantiate a Bert tokenizers
-tokenizer = BertWordPieceTokenizer("bert-large-uncased-vocab.txt", lowercase=True, clean_text=True)
+tokenizer = BertWordPieceTokenizer(
+    "bert-large-uncased-vocab.txt", lowercase=True, clean_text=True)
 tokenizer.add_tokens(['[LINK]'])
 
 tokenizer.enable_padding(max_length=100)
