@@ -11,6 +11,7 @@ from utils import one_hot, jaccard
 from nltk.tokenize import TweetTokenizer
 import nltk
 from nltk.data import load
+import nlpaug.flow as naf
 
 TRAIN_PATH = './data/train.csv'
 TEST_PATH = './data/test.csv'
@@ -46,8 +47,6 @@ class Tweets(Dataset):
         for i, p in enumerate(all_pos):
             self.pos_set[p] = i+1
                     
-
-        print(self.pos_set)
         self.tweet_tokenizer = TweetTokenizer()
 
         data = None
@@ -101,7 +100,8 @@ class Tweets(Dataset):
         else:
 
             data = pd.read_csv(TRAIN_PATH).values
-            data = augment_n(data, N=N)
+            if N > 0:
+                data = augment_n(data, N=N)
 
             for row in data:
                 tid, tweet, selection, sentiment = tuple(row)
@@ -154,6 +154,7 @@ class Tweets(Dataset):
                         token_pos[i] = max(set(sub), key=sub.count)
 
                 if start is None:
+                    print("Data Point Error")
                     print(tweet)
                     print(selection)
                     continue
@@ -240,7 +241,25 @@ def augment_n(data, N=1):
                 total=data.shape[0], leave=False)
 
     # random synonym replacement
-    aug = naw.SynonymAug(aug_max=4, stopwords=stop_words())
+    # aug = naw.SynonymAug(aug_max=4, stopwords=stop_words())
+    aug = naf.Sequential([
+        # naw.ContextualWordEmbsAug(
+        #     'bert-base-uncased',
+        #     aug_max=5, 
+        #     stopwords=stop_words(), 
+        #     device='cuda',
+        #     optimize=True
+        # ), 
+        naw.ContextualWordEmbsAug(
+            'bert-base-uncased',
+            aug_max=3, 
+            stopwords=stop_words(), 
+            device='cuda',
+            optimize=True,
+            action='insert'
+        ),
+        naw.SynonymAug(aug_max=4, stopwords=stop_words())
+    ])
     results = []
     for row in data:
         t, s = augment(row[1], row[2], aug, N)
@@ -248,13 +267,14 @@ def augment_n(data, N=1):
 
         for j, t in enumerate(t):
             augs.append([row[0] + str(j), t, s[j], row[3]])
-        results.append(np.array(augs))
+        if len(augs) > 0:
+            results.append(np.array(augs))
         pbar.update()
 
     results.append(data)
     pbar.clear()
     pbar.close()
-    return np.concatenate(results)
+    return np.concatenate(results, axis=0)
 
 
 def augment(tweet, selection, aug, n):
@@ -270,6 +290,8 @@ def augment(tweet, selection, aug, n):
     tweet = tweet[0:start] + '#>' + tweet[start:end] + '#>' + tweet[end:]
 
     results = aug.augment(tweet, n=n)
+    if n == 1:
+        results = [results]
 
     tweets = []
     selections = []
@@ -278,17 +300,22 @@ def augment(tweet, selection, aug, n):
         p_start = aug_tweet.find('# >')
 
         p_end = aug_tweet.find('# >', p_start+3)
+        aug_selection = None
 
         if p_start == -1:
             p_start = aug_tweet.find('#>')
-             
             p_end = aug_tweet.find('#>', p_start+2)
 
-        aug_tweet = aug_tweet[0:p_start] + \
-            aug_tweet[p_start+4:p_end] + aug_tweet[p_end+4:]
-        tweets.append(aug_tweet)
-        aug_selection = aug_tweet[p_start:p_end - 4]
-        selections.append(aug_selection)
+            aug_tweet = aug_tweet[0:p_start] + aug_tweet[p_start+3:p_end] + aug_tweet[p_end+3:]
+            aug_selection = aug_tweet[p_start:p_end - 3]
+            
+        else:
+            aug_tweet = aug_tweet[0:p_start] + aug_tweet[p_start+4:p_end] + aug_tweet[p_end+4:]
+            aug_selection = aug_tweet[p_start:p_end - 4]
+
+        if aug_tweet != '' and aug_selection != '':
+            tweets.append(aug_tweet)
+            selections.append(aug_selection)
 
     return tweets, selections
 

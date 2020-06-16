@@ -11,19 +11,21 @@ from curves import save_plots
 import argparse
 from tqdm import tqdm
 import math
+import json
+import time
 
 from torch.utils.data import Dataset, DataLoader
 
 
-def prepare_model(model_type, V, P, d_embed, d_lstm, layers, nhead, dropout=.2, lr=.001, l2=0, device='cpu'):
+def prepare_model(V, P, d_embed, d_lstm, layers, nhead, dropout=.2, lr=.001, l2=0, smoothing=.1, device='cpu'):
     model = TransformerSentiment(
         V, P, d_embed, d_lstm, layers, nhead=nhead, dropout=dropout).to(device)
-    criterion = Loss(smoothing=.1, n_classes=150)
+    criterion = Loss(smoothing=smoothing, n_classes=150)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=l2)
     return model, criterion, optimizer
 
 
-def train(epoch, dataset, dataloader, model, criterion, optimizer, device):
+def train(epoch, dataloader, model, criterion, optimizer, device):
     model.train()
     loss_sum = 0.0
     count = 0
@@ -42,7 +44,7 @@ def train(epoch, dataset, dataloader, model, criterion, optimizer, device):
 
         y_hat_start, y_hat_end = model(tweet, pos)
 
-        loss = criterion(y_hat_start, start, y_hat_end, end)
+        loss = criterion(y_hat_start, start, y_hat_end, end, selection)
 
         loss.backward()
         loss_sum += loss.data.item()
@@ -55,7 +57,7 @@ def train(epoch, dataset, dataloader, model, criterion, optimizer, device):
     return loss_sum / count
 
 
-def evaluate(epoch, dataset, dataloader, model, criterion, device, prefix=None):
+def evaluate(epoch, dataloader, model, criterion, device, prefix=None):
     model.eval()
     with torch.no_grad():
         jaccard_sum, loss_sum, count = 0.0, 0.0, 0.0
@@ -95,7 +97,7 @@ def evaluate(epoch, dataset, dataloader, model, criterion, device, prefix=None):
                 (selection == -1).sum(dim=1)
             y_hat_start, y_hat_end = model(tweet, pos)
 
-            loss = criterion(y_hat_start, start, y_hat_end, end)
+            loss = criterion(y_hat_start, start, y_hat_end, end, selection)
 
             loss_sum += loss.data.item()
 
@@ -172,6 +174,59 @@ def stats_to_string(dict):
             *tweet)
     return out
 
+def fit(model, train_dataloader, val_dataloader, criterion, optimizer, device, n_epochs, model_prefix):
+
+    save =  './models/{}.pth'.format(model_prefix)
+    
+    pbar = tqdm(desc='Epoch', total=n_epochs)
+
+    train_losses = []
+    train_jaccs = []
+    val_losses = []
+    val_jaccs = []
+
+    best_jacc = 0
+
+    for i in range(n_epochs):
+        train(i, train_dataloader,
+              model, criterion, optimizer, device)
+        train_loss, train_jaccard, train_stats = evaluate(
+            i, train_dataloader, model, criterion, device, prefix='Train')
+        # val_loss, val_jaccard, val_stats = evaluate(
+        #     i, val_dataloader, model, criterion, device, prefix='Val')
+
+        badge = ''
+        # if val_jaccard > best_jacc:
+        #     best_jacc = val_jaccard
+        #     torch.save(model.state_dict(), save)
+        #     badge += '*'
+
+        torch.save(model.state_dict(), save)
+        pbar.write('--------------{}Epoch {}--------------'.format(badge, i))
+        pbar.write('Train Loss: {}, Train Jaccard: {}'.format(
+            train_loss, train_jaccard))
+        # pbar.write('Val Loss: {}, Val Jaccard: {}'.format(
+        #     val_loss, val_jaccard))
+        # pbar.write('***************Train Stats***************')
+        # pbar.write(stats_to_string(train_stats))
+        # pbar.write('***************Val Stats***************')
+        # pbar.write(stats_to_string(val_stats))
+        pbar.update()
+
+        train_losses.append(train_loss)
+        train_jaccs.append(train_jaccard)
+        # val_losses.append(val_loss)
+        # val_jaccs.append(val_jaccard)
+
+        # save_plots(train_losses, train_jaccs, val_losses,
+        #            val_jaccs, file_prefix=model_prefix)
+    
+    pbar.clear()
+    pbar.close()
+
+    # model.load_state_dict(torch.load(save))
+    # val_loss, val_jaccard, val_stats = evaluate(i, val_dataloader, model, criterion, device, prefix='Final Val')
+    # return val_loss, val_jaccard
 
 if __name__ == "__main__":
 
@@ -180,6 +235,8 @@ if __name__ == "__main__":
                         help="Type of model to train [default: ./Data/ptb]")
     parser.add_argument("--batch_size", default=32, type=int,
                         help="Batch size [default: 32]")
+    parser.add_argument("--label_smoothing", default=0.1, type=float,
+                        help="Label smoothing factor [default: 0.1]")
     parser.add_argument("--embed", default=64, type=int,
                         help="Number of neurons of word embedding [default: 200]")
     parser.add_argument("--hidden", default=64, type=int,
@@ -193,78 +250,42 @@ if __name__ == "__main__":
     parser.add_argument("--dropout", default=.2, type=float,
                         help="Dropout [default: 20]")
     parser.add_argument("--epoch", default=100, type=int,
-                        help="Number of training epochs [default: 10]")
+                        help="Number of training epochs [default: 100]")
     parser.add_argument("--device", type=int,
                         help="GPU card ID to use (if not given, use CPU)")
     parser.add_argument("--seed", default=42, type=int,
                         help="Random seed [default: 42]")
+    parser.add_argument("--augment_n", default=4, type=int,
+                        help="Number of augmented samples to add to dataset [default: 4]")
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
-    model_prefix = 'pos_{}_{}_{}_{}'.format(
-        args.model_type, args.embed, args.hidden, args.layers)
-    save = './models/{}.pth'.format(model_prefix)
+    uid = int(time.time())
+
+    model_prefix = '{}'.format(uid)
+
+    with open('./config/{}.json'.format(model_prefix), 'w') as fp:
+        json.dump(args.__dict__, fp)
 
     device = 'cuda:{}'.format(
         args.device) if args.device is not None else 'cpu'
 
-    dataset = Tweets(device)
-    train_dataset, val_dataset = torch.utils.data.random_split(
-        dataset, [math.floor(len(dataset)*.7), math.ceil(len(dataset)*.3)])
-
+    dataset = Tweets(device, N=args.augment_n)
+    # train_dataset, val_dataset = torch.utils.data.random_split(
+    #     dataset, [math.floor(len(dataset)*.7), math.ceil(len(dataset)*.3)])
+    train_dataset = dataset
     train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size,
                                   shuffle=True, num_workers=12, pin_memory=True, drop_last=True)
-    val_dataloader = DataLoader(
-        val_dataset, batch_size=args.batch_size, num_workers=12, pin_memory=True)
+
+    val_dataloader = None
+    # val_dataloader = DataLoader(
+    #     val_dataset, batch_size=args.batch_size, num_workers=12, pin_memory=True)
 
     V = len(dataset.vocab.keys())
     P = len(dataset.pos_set.keys())
-    model, criterion, optimizer = prepare_model(
-        args.model_type, V, P, args.embed, args.hidden, args.layers, args.nhead, dropout=args.dropout, lr=args.lr, device=device)
-    print("Model Init")
-    pbar = tqdm(desc='Epoch', total=args.epoch)
+    model, criterion, optimizer = prepare_model(V, P, args.embed, args.hidden, args.layers, args.nhead, dropout=args.dropout, smoothing=args.label_smoothing, lr=args.lr, device=device)
 
-    train_losses = []
-    train_jaccs = []
-    val_losses = []
-    val_jaccs = []
+    fit(model, train_dataloader, val_dataloader, criterion, optimizer, device, args.epoch, model_prefix)
 
-    best_jacc = 0
-
-    for i in range(args.epoch):
-        train(i, dataset, train_dataloader,
-              model, criterion, optimizer, device)
-        train_loss, train_jaccard, train_stats = evaluate(
-            i, dataset, train_dataloader, model, criterion, device, prefix='Train')
-        val_loss, val_jaccard, val_stats = evaluate(
-            i, dataset, val_dataloader, model, criterion, device, prefix='Val')
-
-        badge = ''
-        if val_jaccard > best_jacc:
-            best_jacc = val_jaccard
-            torch.save(model.state_dict(), save)
-            badge += '*'
-
-        pbar.write('--------------{}Epoch {}--------------'.format(badge, i))
-        pbar.write('Train Loss: {}, Train Jaccard: {}'.format(
-            train_loss, train_jaccard))
-        pbar.write('Val Loss: {}, Val Jaccard: {}'.format(
-            val_loss, val_jaccard))
-        # pbar.write('***************Train Stats***************')
-        # pbar.write(stats_to_string(train_stats))
-        pbar.write('***************Val Stats***************')
-        pbar.write(stats_to_string(val_stats))
-        pbar.update()
-
-        train_losses.append(train_loss)
-        train_jaccs.append(train_jaccard)
-        val_losses.append(val_loss)
-        val_jaccs.append(val_jaccard)
-
-        save_plots(train_losses, train_jaccs, val_losses,
-                   val_jaccs, file_prefix=model_prefix)
-
-    pbar.clear()
-    pbar.close()

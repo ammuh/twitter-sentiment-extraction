@@ -19,7 +19,7 @@ def save_plots(train_losses, train_accs, test_losses, test_accs, file_prefix='')
     ax.set_xlabel("Epoch")
     ax.set_ylabel("Training Loss")
     ax.legend(loc='upper right')
-    plt.savefig('{}loss.png'.format(file_prefix + '_'))
+    plt.savefig('./figures/{}loss.png'.format(file_prefix + '_'))
 
     # plot train and test accuracies
     plt.clf()
@@ -29,7 +29,7 @@ def save_plots(train_losses, train_accs, test_losses, test_accs, file_prefix='')
     ax.set_xlabel("Epoch")
     ax.set_ylabel("Validation Accuracy")
     ax.legend(loc='lower right')
-    plt.savefig('{}accuracy.png'.format(file_prefix + '_'))
+    plt.savefig('./figures/{}accuracy.png'.format(file_prefix + '_'))
 
     plt.clf()
     plt.close('all')

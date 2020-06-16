@@ -1,127 +1,189 @@
 from data import Tweets
-from model import Embed, LSTM, LSTMSentiment, TransformerSentiment
-
+from model import Embed, TransformerSentiment
+import time
 from utils import one_hot, jaccard
-
+from torch.utils.data import Subset, DataLoader
 import torch
 from torch import nn
+import json
 import numpy as np
 
 from curves import save_plots
 import argparse
 
-from train import fit
+from train import fit, prepare_model
 
-
-# def fit(model_type, dataset, train_idx, val_idx, device, args):
-
-#     V = len(dataset.vocab.keys())
-#     model, criterion, optimizer = prepare_model(args.model_type, V, args.embed, args.hidden, args.layers, device = device)
-
-
-#     train_losses = []
-#     train_jaccs = []
-#     val_losses = []
-#     val_jaccs = []
-
-#     best_jacc = 0
-#     best_index
-
-#     for i in range(args.epoch):
-
-#         train_loss = train(i, dataset, train_idx, args.batch_size, model, criterion, optimizer, device)
-
-
-#         strain_loss, train_jacc = evaluate(i, dataset, train_idx[np.random.permutation(8000)], model, criterion, device)
-#         val_loss, val_jacc = evaluate(i, dataset, val_idx, model, criterion, device)
-
-#         train_losses.append(train_loss)
-#         train_jaccs.append(train_jacc)
-#         val_losses.append(val_loss)
-#         val_jaccs.append(val_jacc)
-
-#         if val_jacc > best_jacc:
-#             torch.save(model.state_dict(), save)
-#         print("\r[Epoch {}] Train Loss: {}, Train Jaccard: {} | Val Loss: {}, Val Jaccard: {}".format(i, train_loss, train_jacc, val_loss, val_jacc))
-
-
-#     model.load_state_dict(torch.load(save))
-
-#     train_loss, train_jacc = evaluate(i, dataset, train_idx, model, criterion, device)
-#     val_loss, val_jacc = evaluate(i, dataset, val_idx, model, criterion, device)
-#     return train_loss, train_jacc, val_loss, val_jacc
 
 if __name__ == "__main__":
+    configs = [
+        # {
+        #     'augment_n': 4,
+        #     'batch_size' : 100,
+        #     'embed' : 128,
+        #     'layers' : 4,
+        #     'hidden' : 128,
+        #     'nhead' : 8,
+        #     'dropout' : 0.2,
+        #     'label_smoothing': .1,
+        #     'lr' : 5e-4,
+        #     'epoch' : 50,
+        #     'device' : 0
+        # },
+        # {
+        #     'augment_n': 4,
+        #     'batch_size' : 100,
+        #     'embed' : 128,
+        #     'layers' : 8,
+        #     'hidden' : 128,
+        #     'nhead' : 8,
+        #     'dropout' : 0.2,
+        #     'label_smoothing': .1,
+        #     'lr' : 5e-4,
+        #     'epoch' : 65,
+        #     'device' : 0
+        # },
+        {
+            'augment_n': 4,
+            'batch_size' : 100,
+            'embed' : 128,
+            'layers' : 12,
+            'hidden' : 128,
+            'nhead' : 8,
+            'dropout' : 0.2,
+            'label_smoothing': .1,
+            'lr' : 5e-4,
+            'epoch' : 80,
+            'device' : 0
+        }
+    ]
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--k_folds', default=5, type=int,
-                        help="Type of model to train [default: ./Data/ptb]")
-    parser.add_argument('--model_type', default='blstm',
-                        help="Type of model to train [default: ./Data/ptb]")
-    parser.add_argument("--batch_size", default=32, type=int,
-                        help="Batch size [default: 32]")
-    parser.add_argument("--embed", default=64, type=int,
-                        help="Number of neurons of word embedding [default: 200]")
-    parser.add_argument("--hidden", default=64, type=int,
-                        help="Number of neurons of each hidden layer [default: 200]")
+    torch.manual_seed(42)
+    np.random.seed(42)
 
-    parser.add_argument("--layers", default=2, type=int,
-                        help="Number of encoder layers layers [default: 1]")
+    for args in configs:
+        
+        uid = int(time.time())
+        print('----------Config {}----------'.format(uid))
+        print(args)
+        model_prefix = '{}'.format(uid)
 
-    parser.add_argument("--lr", default=1e-3, type=float,
-                        help="Learning rate [default: 20]")
-    parser.add_argument("--epoch", default=100, type=int,
-                        help="Number of training epochs [default: 10]")
-    parser.add_argument("--device", type=int,
-                        help="GPU card ID to use (if not given, use CPU)")
-    parser.add_argument("--seed", default=42, type=int,
-                        help="Random seed [default: 42]")
-    args = parser.parse_args()
+        with open('./config/{}.json'.format(model_prefix), 'w') as fp:
+            json.dump(args, fp)
 
-    torch.manual_seed(args.seed)
-    np.random.seed(args.seed)
+        device = 'cuda:{}'.format(
+            args['device']) if args['device'] is not None else 'cpu'
 
-    model_prefix = '{}_{}_{}_{}'.format(
-        args.model_type, args.embed, args.hidden, args.layers)
-    save = './{}_fold.pth'.format(model_prefix)
+        dataset = Tweets(device, N=args['augment_n'])
+        folds = dataset.k_folds(5)
 
-    device = 'cuda:{}'.format(
-        args.device) if args.device is not None else 'cpu'
+        fold_stats = []
 
-    dataset = Tweets(device)
+        for i, fold in enumerate(folds):
+            tr = []
+            for j, f in enumerate(folds):
+                if i != j:
+                    tr.append(f)
+            
+            train_dataset = Subset(dataset, np.concatenate(tr))
+            val_dataset = Subset(dataset, fold)
+            train_dataloader = DataLoader(train_dataset, batch_size=args['batch_size'], shuffle=True, num_workers=12, pin_memory=True, drop_last=True)
+            val_dataloader = DataLoader(val_dataset, batch_size=args['batch_size'], num_workers=12, pin_memory=True)
+            V = len(dataset.vocab.keys())
+            P = len(dataset.pos_set.keys())
 
-    folds = dataset.k_folds(args.k_folds)
+            model, criterion, optimizer = prepare_model(
+                V, 
+                P, 
+                args['embed'],
+                args['hidden'], 
+                args['layers'], 
+                args['nhead'], 
+                dropout=args['dropout'],
+                smoothing=args['label_smoothing'], 
+                lr=args['lr'], 
+                device=device    
+            )
 
-    metrics = []
-    for i, fold in enumerate(folds):
+            best_loss, best_jacc = fit(model, train_dataloader, val_dataloader, criterion, optimizer, device, args['epoch'], model_prefix + '_' + str(i))
+            fold_stats.append([best_loss, best_jacc])
 
-        print("-------Fitting Fold K={}-------".format(i))
-        val_idx = fold
-        train_idx = []
-        for j, fold in enumerate(folds):
-            if i != j:
-                train_idx.append(fold)
+            print('Fold {} - Best Loss: {}, Best Jacc: {}'.format(i, best_loss, best_jacc))
+        fold_stats = np.array(fold_stats)
+        mean = np.mean(fold_stats, axis=0)
+        
+        std = np.std(fold_stats, axis=0)
 
-        train_idx = np.concatenate(train_idx)
+        print(mean)
+        print(std)
 
-        best = fit(args.model_type, dataset, train_idx,
-                   val_idx, device, save, args, stopping=15)
-        print(best)
-        metrics.append(best)
-    print()
-    print("-------Final Metrics--------")
-    print(metrics)
+    # print("---------Average---------")
+    # print(mean)
+    # std = np.zeros(4)
+    # for m in metrics:
+    #     std += (np.array(list(m)) - mean)**2
+    # std = np.sqrt(std/args.k_folds)
+    # print("---------STDEV---------")
+    # print(std)
 
-    mean = np.zeros(4)
-    for m in metrics:
-        mean += np.array(list(m))
-    mean = mean / args.k_folds
+    # train_dataset, val_dataset = torch.utils.data.random_split(
+    #     dataset, [math.floor(len(dataset)*.7), math.ceil(len(dataset)*.3)])
 
-    print("---------Average---------")
-    print(mean)
-    std = np.zeros(4)
-    for m in metrics:
-        std += (np.array(list(m)) - mean)**2
-    std = np.sqrt(std/args.k_folds)
-    print("---------STDEV---------")
-    print(std)
+    # train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size,
+    #                               shuffle=True, num_workers=12, pin_memory=True, drop_last=True)
+    # val_dataloader = DataLoader(
+    #     val_dataset, batch_size=args.batch_size, num_workers=12, pin_memory=True)
+
+    # V = len(dataset.vocab.keys())
+    # P = len(dataset.pos_set.keys())
+
+    # model, criterion, optimizer = prepare_model(
+    #     args.model_type, V, P, args.embed, args.hidden, args.layers, args.nhead, dropout=args.dropout, smoothing=args.label_smoothing, lr=args.lr, device=device)
+
+    # fit(model, train_dataloader, val_dataloader, criterion, optimizer, device, args.epoch, model_prefix)
+    # torch.manual_seed(args.seed)
+    # np.random.seed(args.seed)
+
+    # model_prefix = '{}_{}_{}_{}'.format(
+    #     args.model_type, args.embed, args.hidden, args.layers)
+    # save = './{}_fold.pth'.format(model_prefix)
+
+    # device = 'cuda:{}'.format(
+    #     args.device) if args.device is not None else 'cpu'
+
+    # dataset = Tweets(device)
+
+    # folds = dataset.k_folds(args.k_folds)
+
+    # metrics = []
+    # for i, fold in enumerate(folds):
+
+    #     print("-------Fitting Fold K={}-------".format(i))
+    #     val_idx = fold
+    #     train_idx = []
+    #     for j, fold in enumerate(folds):
+    #         if i != j:
+    #             train_idx.append(fold)
+
+    #     train_idx = np.concatenate(train_idx)
+
+    #     best = fit(args.model_type, dataset, train_idx,
+    #                val_idx, device, save, args, stopping=15)
+    #     print(best)
+    #     metrics.append(best)
+    # print()
+    # print("-------Final Metrics--------")
+    # print(metrics)
+
+    # mean = np.zeros(4)
+    # for m in metrics:
+    #     mean += np.array(list(m))
+    # mean = mean / args.k_folds
+
+    # print("---------Average---------")
+    # print(mean)
+    # std = np.zeros(4)
+    # for m in metrics:
+    #     std += (np.array(list(m)) - mean)**2
+    # std = np.sqrt(std/args.k_folds)
+    # print("---------STDEV---------")
+    # print(std)

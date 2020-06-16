@@ -106,13 +106,14 @@ class SmoothingLoss(nn.Module):
         self.cls = n_classes
         self.dim = 1
 
-    def forward(self, pred, target):
+    def forward(self, pred, target, selection):
         pred = pred.log_softmax(dim=self.dim)
         with torch.no_grad():
             # true_dist = pred.data.clone()
             true_dist = torch.zeros_like(pred)
             true_dist.fill_(self.smoothing / (self.cls - 1))
             true_dist.scatter_(1, target.data.unsqueeze(1), self.confidence)
+            true_dist = true_dist * (selection != -1).float()
         return torch.mean(torch.sum(-true_dist * pred, dim=self.dim))
 
 class Loss(nn.Module):
@@ -121,5 +122,6 @@ class Loss(nn.Module):
         self.start_loss = SmoothingLoss(smoothing=smoothing, n_classes=n_classes)
         self.end_loss = SmoothingLoss(smoothing=smoothing, n_classes=n_classes)
 
-    def forward(self, y_hat_start, start, y_hat_end, end):
-        return (self.start_loss(y_hat_start, start) + self.end_loss(y_hat_end, end)) * 0.5
+    def forward(self, y_hat_start, start, y_hat_end, end, selection):
+        return (self.start_loss(y_hat_start, start, selection) + self.end_loss(y_hat_end, end, selection)) * 0.5
+

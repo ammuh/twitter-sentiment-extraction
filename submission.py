@@ -10,9 +10,9 @@ dataset = Tweets(device, test=True)
 
 V = len(dataset.vocab.keys())
 P = len(dataset.pos_set.keys())
-model = TransformerSentiment(V, P, 128, 128, 8, nhead=8, dropout=.2).to(device)
+model = TransformerSentiment(V, P, 132, 132, 12, nhead=12, dropout=.2).to(device)
 
-model.load_state_dict(torch.load('./models/pos_transformer_128_128_8.pth'))
+model.load_state_dict(torch.load('./models/1592284148.pth'))
 
 model.eval()
 file1 = open("submission.csv", "w")
