@@ -192,21 +192,21 @@ def fit(model, train_dataloader, val_dataloader, criterion, optimizer, device, n
               model, criterion, optimizer, device)
         train_loss, train_jaccard, train_stats = evaluate(
             i, train_dataloader, model, criterion, device, prefix='Train')
-        # val_loss, val_jaccard, val_stats = evaluate(
-        #     i, val_dataloader, model, criterion, device, prefix='Val')
+        val_loss, val_jaccard, val_stats = evaluate(
+            i, val_dataloader, model, criterion, device, prefix='Val')
 
         badge = ''
-        # if val_jaccard > best_jacc:
-        #     best_jacc = val_jaccard
-        #     torch.save(model.state_dict(), save)
-        #     badge += '*'
+        if val_jaccard > best_jacc:
+            best_jacc = val_jaccard
+            torch.save(model.state_dict(), save)
+            badge += '*'
 
         torch.save(model.state_dict(), save)
         pbar.write('--------------{}Epoch {}--------------'.format(badge, i))
         pbar.write('Train Loss: {}, Train Jaccard: {}'.format(
             train_loss, train_jaccard))
-        # pbar.write('Val Loss: {}, Val Jaccard: {}'.format(
-        #     val_loss, val_jaccard))
+        pbar.write('Val Loss: {}, Val Jaccard: {}'.format(
+            val_loss, val_jaccard))
         # pbar.write('***************Train Stats***************')
         # pbar.write(stats_to_string(train_stats))
         # pbar.write('***************Val Stats***************')
@@ -215,18 +215,18 @@ def fit(model, train_dataloader, val_dataloader, criterion, optimizer, device, n
 
         train_losses.append(train_loss)
         train_jaccs.append(train_jaccard)
-        # val_losses.append(val_loss)
-        # val_jaccs.append(val_jaccard)
+        val_losses.append(val_loss)
+        val_jaccs.append(val_jaccard)
 
-        # save_plots(train_losses, train_jaccs, val_losses,
-        #            val_jaccs, file_prefix=model_prefix)
+        save_plots(train_losses, train_jaccs, val_losses,
+                   val_jaccs, file_prefix=model_prefix)
     
     pbar.clear()
     pbar.close()
 
-    # model.load_state_dict(torch.load(save))
-    # val_loss, val_jaccard, val_stats = evaluate(i, val_dataloader, model, criterion, device, prefix='Final Val')
-    # return val_loss, val_jaccard
+    model.load_state_dict(torch.load(save))
+    val_loss, val_jaccard, val_stats = evaluate(i, val_dataloader, model, criterion, device, prefix='Final Val')
+    return val_loss, val_jaccard
 
 if __name__ == "__main__":
 
@@ -273,15 +273,15 @@ if __name__ == "__main__":
         args.device) if args.device is not None else 'cpu'
 
     dataset = Tweets(device, N=args.augment_n)
-    # train_dataset, val_dataset = torch.utils.data.random_split(
-    #     dataset, [math.floor(len(dataset)*.7), math.ceil(len(dataset)*.3)])
+    train_dataset, val_dataset = torch.utils.data.random_split(
+        dataset, [math.floor(len(dataset)*.7), math.ceil(len(dataset)*.3)])
     train_dataset = dataset
     train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size,
                                   shuffle=True, num_workers=12, pin_memory=True, drop_last=True)
 
     val_dataloader = None
-    # val_dataloader = DataLoader(
-    #     val_dataset, batch_size=args.batch_size, num_workers=12, pin_memory=True)
+    val_dataloader = DataLoader(
+        val_dataset, batch_size=args.batch_size, num_workers=12, pin_memory=True)
 
     V = len(dataset.vocab.keys())
     P = len(dataset.pos_set.keys())
